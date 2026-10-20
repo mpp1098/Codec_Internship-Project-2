@@ -1,0 +1,80 @@
+import streamlit as st
+import pandas as pd
+from pathlib import Path
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+st.set_page_config(page_title="MovieMatch AI", page_icon="🎬", layout="wide")
+st.title("🎬 MovieMatch AI")
+st.caption("A content-based movie recommendation system using TF-IDF and cosine similarity.")
+
+DATA_PATH = Path(__file__).parent / "data" / "movies.csv"
+movies = pd.read_csv(DATA_PATH)
+movies["genres"] = movies["genres"].fillna("")
+movies["overview"] = movies["overview"].fillna("")
+movies["combined_features"] = (movies["genres"] + " " + movies["overview"]).str.lower()
+
+@st.cache_data
+def build_similarity(texts):
+    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
+    matrix = vectorizer.fit_transform(texts)
+    return cosine_similarity(matrix)
+
+similarity = build_similarity(movies["combined_features"].tolist())
+
+with st.sidebar:
+    st.header("Explore")
+    genre_options = sorted({g.strip() for item in movies["genres"] for g in item.split() if g.strip()})
+    selected_genres = st.multiselect("Filter by genre tags", genre_options)
+    st.caption("Recommendations are based on movie genre tags and short descriptions.")
+
+tab1, tab2 = st.tabs(["🎯 Recommend for me", "📚 Browse movies"])
+with tab1:
+    st.subheader("Find movies similar to a favourite")
+    selected_title = st.selectbox("Choose a movie you like", movies["title"].tolist())
+    number = st.slider("Number of recommendations", min_value=3, max_value=10, value=5)
+    if st.button("Recommend movies", type="primary"):
+        idx = movies.index[movies["title"] == selected_title][0]
+        scores = list(enumerate(similarity[idx]))
+        scores = sorted(scores, key=lambda x: x[1], reverse=True)
+        results = []
+        for movie_idx, score in scores:
+            if movie_idx == idx:
+                continue
+            row = movies.iloc[movie_idx]
+            if selected_genres and not any(g in row["genres"].split() for g in selected_genres):
+                continue
+            results.append((row, score))
+            if len(results) >= number:
+                break
+        if results:
+            cols = st.columns(min(3, len(results)))
+            for i, (row, score) in enumerate(results):
+                with cols[i % len(cols)]:
+                    st.markdown(f"### {row['title']}")
+                    st.write(f"**Genres:** {row['genres']}")
+                    st.write(row["overview"])
+                    st.progress(float(max(0, min(score, 1))))
+                    st.caption(f"Similarity score: {score:.2f}")
+        else:
+            st.warning("No recommendations matched those filters. Clear one or more genre filters and try again.")
+    st.info("Similarity scores compare text features; they are not ratings or guarantees that you will like a movie.")
+
+with tab2:
+    st.subheader("Movie catalogue")
+    query = st.text_input("Search titles, genres or descriptions")
+    view = movies.copy()
+    if selected_genres:
+        view = view[view["genres"].apply(lambda text: any(g in text.split() for g in selected_genres))]
+    if query:
+        mask = (
+            view["title"].str.contains(query, case=False, na=False)
+            | view["genres"].str.contains(query, case=False, na=False)
+            | view["overview"].str.contains(query, case=False, na=False)
+        )
+        view = view[mask]
+    st.write(f"Showing **{len(view)}** movies")
+    st.dataframe(view[["title", "genres", "overview"]], use_container_width=True, hide_index=True)
+
+st.divider()
+st.caption("Educational demo: recommendations are generated from the included movie metadata, not real user ratings.")
